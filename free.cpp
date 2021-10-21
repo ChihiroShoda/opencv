@@ -20,7 +20,6 @@ int main(int argc, char *argv[])
     return -1;
   }
 
-  // 2. initialize VideoCapture
   cv::Mat frame;
   cv::Mat before;
   cv::Mat input_pic;
@@ -29,33 +28,36 @@ int main(int argc, char *argv[])
   cap >> frame;
   cap >> before;
   double pic_mean;
+  int picture_number = 1;
+  const char *preset_file;
 
-  //鼻と口の画像
+  //鼻と口の画像を入れる
   cv::Mat input;
-  
 
-  if (argc == 1){  
-    const char *preset_file = "nose_and_mouth.JPG";
+  if (argc == 1){
+    std::string filename = "pic" + std::to_string(picture_number) + ".jpg";
+    preset_file = filename.c_str();
     input_pic = cv::imread(preset_file, 1);
     if(input_pic.empty()){
         fprintf(stderr, "cannot open %s\n", preset_file);
         exit(0);
     }
-    pic_mean = cv::mean(input_pic)[0];
+    //画像の切り取り
+    std::tie(input_pic, pic_mean) = cuttingPicture(input_pic, cascade, cascade_eye); //画像の切り取りと明るさを取得
+    //cv::imshow("input", input_pic);
   }
   else{
-    const char *preset_file = argv[1];
-    input = cv::imread(preset_file, 1);
-    if(input.empty()){
+    preset_file = argv[1];
+    input_pic = cv::imread(preset_file, 1);
+    if(input_pic.empty()){
         fprintf(stderr, "cannot open %s\n", preset_file);
         exit(0);
     }
     //画像の切り取り
-    std::tie(input_pic, pic_mean) = cuttingPicture(input, cascade, cascade_eye); //画像の切り取りと明るさを取得
-    cv::imshow("input", input_pic);
+    std::tie(input_pic, pic_mean) = cuttingPicture(input_pic, cascade, cascade_eye); //画像の切り取りと明るさを取得
+    //cv::imshow("input", input_pic);
   }
-  
-  // 3. prepare window and trackbar
+
   //cv::namedWindow("after", 1);
   //cv::namedWindow("before", 1);
 
@@ -65,18 +67,15 @@ int main(int argc, char *argv[])
 
   for(;;){
 
-    // 4. capture frame
     cap >> frame;
     cap >> before;
 
     //convert to gray scale
     cv::cvtColor(frame, gray, CV_BGR2GRAY);
 
-    // 5. scale-down the image
     cv::resize(gray, smallImg, smallImg.size(), 0, 0, cv::INTER_LINEAR);
     cv::equalizeHist(smallImg, smallImg);
 
-    // 6. detect face using Haar-classifier
     std::vector<cv::Rect> faces;
     std::vector<cv::Rect> eyes;
     // multi-scale face searching
@@ -87,7 +86,6 @@ int main(int argc, char *argv[])
                     CV_HAAR_SCALE_IMAGE,
                     cv::Size(30, 30));
 
-    // 7. mosaic(pixelate) face-region
     for(int i = 0; i < faces.size(); i++){
       cv::Point center;
       int radius;
@@ -98,7 +96,7 @@ int main(int argc, char *argv[])
       cv::Rect face_rect(center.x - radius, center.y - radius, radius * 2, radius);
       double face_width = face_rect.width;
       cv::Mat faceRegion = frame(face_rect);
-      cv::rectangle(frame, face_rect, cv::Scalar(0, 0, 255), 2);
+      //cv::rectangle(frame, face_rect, cv::Scalar(0, 0, 255), 2);
 
       cascade_eye.detectMultiScale(faceRegion, eyes,
                     1.1,  //大きくするとモザイク範囲ちいさくなる(2.1)
@@ -111,26 +109,26 @@ int main(int argc, char *argv[])
       double min_height = 1000000.0;
       for (auto eyeRect:eyes){
           cv::Rect eye_rect(face_rect.x + eyeRect.x, face_rect.y + eyeRect.y, eyeRect.width, eyeRect.height);
-          cv::rectangle(frame, eye_rect, cv::Scalar(0, 255, 0), 2);
+          //cv::rectangle(frame, eye_rect, cv::Scalar(0, 255, 0), 2);
           if (min_x > eyeRect.x){
               min_x = eyeRect.x;
               min_y = eyeRect.y;
               min_width = eyeRect.width;
               min_height = eyeRect.height;
           }
+          cv::Mat nose_pic;
+          cv::resize(input_pic, nose_pic, cv::Size(), face_width/input_pic.cols, face_width/input_pic.cols, cv::INTER_LINEAR);
+          cv::Mat roi = frame(cv::Rect(face_rect.x, face_rect.y + min_y + min_height - 5, nose_pic.cols, nose_pic.rows));
 
-          cv::resize(input_pic, input_pic, cv::Size(), face_width/input_pic.cols, face_width/input_pic.cols, cv::INTER_LINEAR);
-          cv::Mat roi = frame(cv::Rect(face_rect.x, face_rect.y + min_y + min_height, input_pic.cols, input_pic.rows));
-
-          //明るさを測定 //目の間で測定したい
-          cv::Rect center_rect(face_rect.x + min_x + min_width, face_rect.y + min_y, 10, min_height);
+          //明るさを測定 //目の間で測定した
+          cv::Rect center_rect(face_rect.x + min_x + min_width, face_rect.y + min_y, 5, min_height);
           cv::Mat center = frame(center_rect).clone();
           double video_mean = cv::mean(center)[0];
           cv::Mat pic_after;
-          input_pic.convertTo(pic_after, -1, video_mean/pic_mean, 0);
-          cv::imshow("pic_after", input_pic);
+          pic_after = video_mean/pic_mean * nose_pic; //鼻と口の画像の色味を動画に合わせる
+          //cv::imshow("pic_after", pic_after);
           
-          input_pic.copyTo(roi);
+          pic_after.copyTo(roi);
       }
     }
     
@@ -145,7 +143,22 @@ int main(int argc, char *argv[])
     int key = cv::waitKey(10);
     if(key == 'q' || key == 'Q')
         break;
+
+    else if('0' <= key && key <= '9'){
+      //std::string k = key;
+      std::string filename = "pic" + std::to_string(key - 48) + ".jpg";
+      preset_file = filename.c_str();
+      input_pic = cv::imread(preset_file, 1);
+      if(input_pic.empty()){
+          fprintf(stderr, "cannot open %s\n", preset_file);
+          exit(0);
+      }
+      //画像の切り取り
+      std::tie(input_pic, pic_mean) = cuttingPicture(input_pic, cascade, cascade_eye); //画像の切り取りと明るさを取得
+      //cv::imshow("input", input_pic);
+      }
     }
+    
  return 0;
 }
 
@@ -192,7 +205,7 @@ std::tuple<cv::Mat, double> cuttingPicture(cv::Mat input_pic, cv::CascadeClassif
               min_width = eyeRect.width;
               min_height = eyeRect.height;
           }
-          cv::Rect not_eye_rect(min_x, face_rect.y + min_y + min_height, face_rect.width, face_rect.height - min_height);
+          cv::Rect not_eye_rect(face_rect.x, face_rect.y + min_y + min_height, face_rect.width, face_rect.height - min_height);
 
           cv::Rect center_rect(face_rect.x + min_x + min_width, face_rect.y + min_y, 10, min_height);
           cv::Mat center_pic = input_pic(center_rect).clone();
